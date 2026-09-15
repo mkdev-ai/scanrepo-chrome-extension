@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>scanrepo.dev — options</title>
+    <link rel="stylesheet" href="options.css" />
+  </head>
+  <body>
+    <main class="wrap">
+      <h1>ScanRepo GitHub extension</h1>
+      <p class="lede">
+        Adds a <strong>Scan this repo</strong> button to GitHub repository pages. Scans are
+        performed by <a href="https://www.scanrepo.dev" target="_blank" rel="noopener noreferrer">scanrepo.dev</a>;
+        the extension never downloads or executes repository code.
+      </p>
+
+      <form id="options-form">
+        <section class="field">
+          <label for="githubToken">GitHub personal access token (optional)</label>
+          <input
+            id="githubToken"
+            name="githubToken"
+            type="password"
+            autocomplete="off"
+            spellcheck="false"
+            placeholder="ghp_…"
+          />
+          <p class="hint">
+            Anonymous scans hit GitHub's rate limits, which can truncate large repositories and
+            produce an <em>inconclusive</em> result. A token raises those limits for full coverage.
+            It is sent only to scanrepo.dev, never to GitHub pages, and stored in your synced
+            Chrome profile. A token with no scopes is sufficient.
+          </p>
+        </section>
+
+        <section class="field">
+          <label class="checkbox">
+            <input id="publish" name="publish" type="checkbox" />
+            <span>Publish scans to scanrepo.dev</span>
+          </label>
+          <p class="hint">
+            Off by default. When off, the extension asks scanrepo.dev not to add your scan to its
+            public feed. Note that scanrepo.dev may still serve a previously cached public result.
+          </p>
+        </section>
+
+        <section class="field">
+          <label class="checkbox">
+            <input id="scanOnLoad" name="scanOnLoad" type="checkbox" />
+            <span>Scan automatically when a repository page loads</span>
+          </label>
+          <p class="hint">
+            Off by default. When off, scanning only happens when you click the button.
+          </p>
+        </section>
+
+        <section class="field">
+          <label for="timeoutMs">Scan timeout (seconds)</label>
+          <input id="timeoutMs" name="timeoutMs" type="number" min="10" max="600" step="5" />
+          <p class="hint">Large repositories can take over a minute on a cold scan.</p>
+        </section>
+
+        <div class="actions">
+          <button type="submit" class="primary">Save</button>
+          <button type="button" id="reset">Reset to defaults</button>
+          <span id="status" role="status" aria-live="polite"></span>
+        </div>
+      </form>
+
+      <section class="notes">
+        <h2>Limitations</h2>
+        <ul>
+          <li>Public repositories only — scanrepo.dev cannot scan private repositories.</li>
+          <li>
+            Static analysis only. A <em>safe</em> verdict means no known pattern matched; it is
+            not a guarantee that a repository is safe.
+          </li>
+          <li>Nothing is ever cloned or executed by the extension.</li>
+        </ul>
+      </section>
+    </main>
+    <script type="module" src="options.js"></script>
+  </body>
+</html>

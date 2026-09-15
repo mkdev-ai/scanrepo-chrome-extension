@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "ScanRepo — one-click repo security scan on GitHub",
+  "version": "0.1.0",
+  "description": "Adds a \"Scan this repo\" button to GitHub repository pages. Checks a public repo for malware, credential stealers and supply-chain risk via scanrepo.dev before you clone it.",
+  "minimum_chrome_version": "110",
+  "permissions": ["storage"],
+  "host_permissions": ["https://www.scanrepo.dev/*"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["content.css"],
+      "matches": ["https://github.com/*"]
+    }
+  ],
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "action": {
+    "default_title": "ScanRepo options"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

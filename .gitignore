@@ -1,0 +1,10 @@
+node_modules/
+dist/
+release/
+*.zip
+coverage/
+*.log
+.DS_Store
+.vscode/
+.idea/
+tests/e2e/downloads/
