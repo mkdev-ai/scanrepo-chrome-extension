@@ -1,0 +1,64 @@
+# AGENTS.md
+
+Chrome extension (Manifest V3) that adds a repo security scan button to GitHub pages,
+powered by scanrepo.dev. Plain JavaScript with JSDoc types; `tsc` typechecks the JSDoc.
+
+## Commands
+
+```bash
+npm run lint         # eslint
+npm run typecheck    # tsc -p jsconfig.json (JSDoc types, no TS source)
+npm test             # unit tests — offline, deterministic
+npm run test:e2e     # real Chromium + live GitHub + live scanrepo.dev scan
+npm run verify       # lint + typecheck + test + build
+npm run build        # esbuild -> dist/
+npm run package      # dist/ -> versioned .zip
+```
+
+## Testing rules
+
+- **`npm test` must stay offline.** Unit tests exercise the scan client against a real
+  local HTTP server (`tests/unit/scan-client.test.js`), not a mocked fetch and not the
+  live API. Hitting scanrepo.dev from the unit suite makes it flaky and gets the shared
+  service to return HTTP 429 for everyone.
+- **Live API checks belong in `npm run test:e2e`.** That suite covers request shape,
+  verdict rendering and error classification against the real service.
+- Do not use mocks where a real code path can run. Prefer a local server, jsdom, or a
+  real browser.
+
+## GitHub DOM gotchas (verified 2026-09, will drift again)
+
+GitHub's repository header was rewritten. Do not reintroduce the old assumptions:
+
+- `data-testid="code-button"` **no longer exists**. Discovery falls back to a
+  label-based search for a rendered `button`/`summary` whose text is exactly "Code".
+- The action bar is **not** inside `#repository-container-header`; that element now holds
+  only the repo name and the visibility label.
+- `ul.pagehead-actions` now contains the **Notifications** control, not Code/Watch/Fork.
+- The Code button's own `parentElement` is the action row. Insert with
+  `container.insertBefore(button, codeButton)` — `insertAdjacentElement('beforebegin', …)`
+  on the container lands the button as a sibling of the row instead of inside it.
+- File-view dropdowns also read "Code". Prefer elements with client rects, and take the
+  first in document order (the overview action row comes before any in-file control).
+
+All discovery lives in `src/content/dom.js` and takes an explicit root so it is testable
+under jsdom. Keep it that way.
+
+## scanrepo.dev contract
+
+- `POST https://www.scanrepo.dev/api/scan`, NDJSON streaming, ends with a `result` frame.
+- `url` must be `github.com/owner/repo` (scheme-less) or `https://…`. A bare
+  `owner/repo` returns **HTTP 400**. Build it with `toScanSlug()` in `src/lib/parse.js`.
+- Use the `www.` host; the apex redirects with a 307.
+- Verified details and corrections are in `docs/integration-contract.md`. The MCP server
+  is **not** usable from an extension (stdio-only, and `scanrepo-mcp` is unpublished).
+
+## Architecture invariants
+
+- The **service worker owns all network access**. The content script only posts messages,
+  so no scanrepo.dev request is attributed to the `github.com` origin.
+- **Report text is untrusted** (a hostile repo names its own files). Everything reaching
+  the DOM is escaped in `src/ui/tooltip.js`. Keep the escaping tests passing.
+- MV3 worker fetches are not visible to `page.on('request')` in Puppeteer. Observe them
+  via a CDP session on the worker target (`Network.enable` +
+  `Network.requestWillBeSent`).
