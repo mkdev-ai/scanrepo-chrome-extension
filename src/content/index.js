@@ -2,6 +2,7 @@
 // action bar, immediately before the native "Code" button.
 
 import { buildViewModel, errorViewModel, pendingViewModel } from '../lib/report.js';
+import { autoScanKey, shouldAutoScan } from './auto-scan.js';
 import { findActionContainer, findCodeButton, isPrivateRepo } from './dom.js';
 import { parseRepoFromUrl } from '../lib/parse.js';
 import { removeTooltip, renderTooltip } from '../ui/tooltip.js';
@@ -16,6 +17,11 @@ let state = 'idle';
 let currentVm = null;
 /** @type {ReturnType<typeof setTimeout> | undefined} */
 let closeTimer;
+/** Repo already auto-scanned in this page. Survives in-repo navigation so a repo is
+ *  scanned once per visit, while a move to a different repo scans again. */
+let lastAutoScannedKey = '';
+/** Last read of the scanOnLoad preference; the flag is never consulted directly. */
+let scanOnLoadEnabled = false;
 
 function injectStyles() {
   if (document.getElementById(STYLE_ID)) return;
@@ -103,6 +109,9 @@ function showLoading() {
 /** @param {import('../types.js').RepoTarget} target */
 async function runScan(target) {
   if (state === 'loading') return;
+  // Remember which repo this page has already scanned, so the auto-scan below does not
+  // fire again the next time the observer runs injection.
+  lastAutoScannedKey = autoScanKey(target);
   setButtonState('loading', 'Scanning…');
   showLoading();
 
@@ -129,6 +138,32 @@ async function runScan(target) {
   currentVm = buildViewModel(response.report);
   setButtonState('ready', 'Scan this repo');
   showTooltip();
+}
+
+/** Trigger the automatic scan once per repository, when the preference is on.
+ *  Injection re-runs constantly on GitHub's single-page app, so the guard matters. */
+function maybeAutoScan() {
+  // Without the button there is nowhere to show progress or the result, so wait for
+  // injection to land; the observer re-runs this as soon as it does.
+  if (!document.getElementById(BUTTON_ID)) return;
+  const target = parseRepoFromUrl(window.location.href);
+  if (!target) return;
+  const key = autoScanKey(target);
+  if (!shouldAutoScan({ enabled: scanOnLoadEnabled, key, lastScannedKey: lastAutoScannedKey, state })) return;
+  lastAutoScannedKey = key;
+  runScan(target);
+}
+
+/** Read the scanOnLoad preference from the worker, which owns chrome.storage. */
+async function loadScanOnLoadSetting() {
+  try {
+    const response = await chrome.runtime.sendMessage({ type: 'scanrepo:options' });
+    scanOnLoadEnabled = Boolean(response && response.scanOnLoad === true);
+  } catch {
+    // Worker not reachable (e.g. extension was reloaded): leave auto-scan off.
+    scanOnLoadEnabled = false;
+  }
+  maybeAutoScan();
 }
 
 /** Inject the button before "Code". Returns false when the page is not ready. */
@@ -187,6 +222,7 @@ function injectButton() {
 
   // Insert inside the action row, immediately before the native Code control.
   container.insertBefore(button, codeButton);
+  maybeAutoScan();
   return true;
 }
 
@@ -205,6 +241,8 @@ function cleanup() {
 function watchForChanges() {
   injectStyles();
   injectButton();
+  // Fire-and-forget: loads the auto-scan preference, then scans if it is on.
+  void loadScanOnLoadSetting();
 
   let lastUrl = window.location.href;
   const observer = new MutationObserver(() => {
@@ -214,6 +252,8 @@ function watchForChanges() {
       injectStyles();
     }
     injectButton();
+    // The observer is the only signal that injection (and so the button) is ready.
+    maybeAutoScan();
   });
   observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
@@ -232,12 +272,14 @@ function watchForChanges() {
       cleanup();
       injectStyles();
       injectButton();
+      maybeAutoScan();
     }
   });
   window.addEventListener('popstate', () => {
     cleanup();
     injectStyles();
     injectButton();
+    maybeAutoScan();
   });
 
   // Progress frames from the background worker keep the tooltip honest while scanning.

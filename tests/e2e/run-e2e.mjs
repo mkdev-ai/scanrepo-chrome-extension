@@ -80,12 +80,14 @@ try {
     hasForm: Boolean(document.getElementById('options-form')),
     tokenField: document.getElementById('githubToken')?.type,
     publishDefault: document.getElementById('publish')?.checked,
+    scanOnLoadDefault: document.getElementById('scanOnLoad')?.checked,
     timeoutValue: document.getElementById('timeoutMs')?.value,
     limitsMentioned: document.body.textContent.includes('Public repositories only'),
   }));
   check('options form renders', optionsState.hasForm);
   check('token field is masked', optionsState.tokenField === 'password', optionsState.tokenField);
   check('publish is off by default', optionsState.publishDefault === false);
+  check('scan-on-load is off by default', optionsState.scanOnLoadDefault === false);
   check('timeout default is 90 seconds', optionsState.timeoutValue === '90', optionsState.timeoutValue);
   check('the public-repos-only limitation is documented', optionsState.limitsMentioned);
   check('no script errors on the options page', optionsErrors.length === 0, optionsErrors.join('; '));
@@ -176,6 +178,12 @@ try {
   check('the button label reads "Scan this repo"', injected.label === 'Scan this repo', injected.label);
   check('the content stylesheet is injected', injected.stylesheetHref.includes('content.css'));
   check('the button declares a dialog popup', injected.hasAria === 'dialog');
+
+  // scanOnLoad is off by default, so opening a repo page must not scan on its own.
+  // This is the regression guard for SCB-3: the preference used to be saved but never read.
+  check('no scan runs automatically while scan-on-load is off', scanRequests.length === 0, `got ${scanRequests.length}`);
+  const idleState = await page.evaluate(() => document.getElementById('scanrepo-scan-button')?.dataset.state);
+  check('the button stays idle until it is clicked', idleState !== 'loading', String(idleState));
 
   // ---------------------------------------------------------------------------
   console.log(`\n[4] a live scan runs and returns a verdict`);
@@ -300,7 +308,103 @@ try {
   check('no button on a non-repository page', absent);
 
   // ---------------------------------------------------------------------------
-  console.log(`\n[9] the live API contract holds for other shapes`);
+  console.log(`\n[9] scan-on-load runs by itself once it is enabled`);
+  // Regression guard for SCB-3. Turn the preference on, then open a repository page
+  // without clicking anything: the scan must start on its own and reach a verdict.
+  await optionsPage.evaluate(() => {
+    document.getElementById('scanOnLoad').checked = true;
+    document.getElementById('options-form').requestSubmit();
+  });
+  const scanOnLoadSaved = await worker.evaluate(() => chrome.storage.sync.get(['scanOnLoad']));
+  check('the scan-on-load preference persists', scanOnLoadSaved.scanOnLoad === true, String(scanOnLoadSaved.scanOnLoad));
+
+  // A second repository proves the automatic scan is not tied to the first fixture.
+  const AUTO_REPO = process.env.E2E_AUTO_REPO || 'octocat/Spoon-Knife';
+  const autoRequests = [];
+  workerSession.on('Network.requestWillBeSent', (event) => {
+    if (event.request.url.includes('scanrepo.dev/api')) {
+      autoRequests.push({ url: event.request.url, body: event.request.postData });
+    }
+  });
+
+  const autoPage = await browser.newPage();
+  await autoPage.setViewport({ width: 1280, height: 900 });
+  await autoPage.goto(`https://github.com/${AUTO_REPO}`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60_000,
+  });
+  await autoPage.waitForSelector('#scanrepo-scan-button', { timeout: 30_000 });
+
+  // Nobody clicks the button. Leaving `idle` at all is the behaviour under test, and it
+  // happens within moments of load — so a short window keeps a regression failing fast
+  // instead of turning into a two-minute harness timeout. A completed cached scan can
+  // jump straight from idle to ready, so every non-idle state counts.
+  let startedOnItsOwn = true;
+  try {
+    await autoPage.waitForFunction(
+      () => {
+        const state = document.getElementById('scanrepo-scan-button')?.dataset.state;
+        return state === 'loading' || state === 'ready' || state === 'error';
+      },
+      { timeout: 20_000, polling: 250 },
+    );
+  } catch {
+    startedOnItsOwn = false;
+  }
+  check('the page starts a scan with no click', startedOnItsOwn);
+
+  const autoResult = { state: 'idle', verdict: undefined, visible: false, repo: '', errorText: 'never started' };
+  if (startedOnItsOwn) {
+    await autoPage.waitForFunction(
+      () => {
+        const state = document.getElementById('scanrepo-scan-button')?.dataset.state;
+        return state === 'ready' || state === 'error';
+      },
+      { timeout: 120_000, polling: 500 },
+    );
+    const observed = await autoPage.evaluate(() => {
+      const pick = (value, key) => (value === null || value === undefined ? undefined : value[key]);
+      const text = (value) => (value === null || value === undefined ? '' : value);
+      const tooltip = document.getElementById('scanrepo-tooltip');
+      const button = document.getElementById('scanrepo-scan-button');
+      return {
+        state: pick(button, 'dataset') ? button.dataset.state : undefined,
+        verdict: pick(tooltip, 'dataset') ? tooltip.dataset.verdict : undefined,
+        visible: Boolean(tooltip && tooltip.classList.contains('scanrepo-tooltip-visible')),
+        repo: text(pick(tooltip ? tooltip.querySelector('.scanrepo-repo') : null, 'textContent')),
+        errorText: text(pick(tooltip ? tooltip.querySelector('.scanrepo-error') : null, 'textContent')),
+      };
+    });
+    Object.assign(autoResult, observed);
+  }
+
+  check('the page scans itself without a click', autoResult.state === 'ready', `state=${autoResult.state} ${autoResult.errorText}`);
+  check('the automatic scan shows its verdict', autoResult.visible && autoResult.verdict !== undefined, `verdict=${autoResult.verdict}`);
+  check(
+    'the automatic scan is for the repository on screen',
+    autoResult.repo === AUTO_REPO,
+    autoResult.repo,
+  );
+
+  // Exactly one scan for the page just opened — the observer runs injection many times
+  // per page, so a missing guard would show up as a burst of requests here.
+  const autoBodies = autoRequests.map((request) => {
+    try {
+      return JSON.parse(request.body === undefined ? 'null' : request.body);
+    } catch {
+      return null;
+    }
+  });
+  check('the automatic scan runs exactly once', autoRequests.length === 1, `got ${autoRequests.length}`);
+  const autoBody = autoBodies[0];
+  check(
+    'the automatic scan targets the repository on screen',
+    Boolean(autoBody) && autoBody.url === `github.com/${AUTO_REPO}`,
+    JSON.stringify(autoBody),
+  );
+
+  // ---------------------------------------------------------------------------
+  console.log(`\n[10] the live API contract holds for other shapes`);
   // The unit suite covers transport deterministically against a local server; these
   // checks confirm the real API still behaves the way the client assumes.
   const apiProbe = await worker.evaluate(async () => {
