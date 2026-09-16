@@ -6,6 +6,7 @@ import { DEFAULT_OPTIONS } from '../contract.js';
 import { scanRepo } from '../lib/scan-client.js';
 
 const SCAN_MESSAGE = 'scanrepo:scan';
+const OPTIONS_MESSAGE = 'scanrepo:options';
 const GITHUB_HOSTS = ['github.com', 'www.github.com'];
 
 export async function readOptions() {
@@ -77,7 +78,17 @@ async function respondWithScan(target, sender, sendResponse) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (!message || message.type !== SCAN_MESSAGE) return false;
+  if (!message) return false;
+
+  // Reading preferences is not a scan: it involves no repository and no network, so it
+  // skips the GitHub-origin check below. Only the auto-scan flag crosses the boundary —
+  // the stored GitHub token is never handed to a page-origin script.
+  if (message.type === OPTIONS_MESSAGE) {
+    readOptions().then((options) => sendResponse({ ok: true, scanOnLoad: options.scanOnLoad === true }));
+    return true; // keep the message channel open for the async response
+  }
+
+  if (message.type !== SCAN_MESSAGE) return false;
 
   // Only relay for requests originating from a GitHub tab.
   if (!GITHUB_HOSTS.includes(senderHostname(sender))) {

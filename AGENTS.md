@@ -57,6 +57,11 @@ under jsdom. Keep it that way.
 
 - The **service worker owns all network access**. The content script only posts messages,
   so no scanrepo.dev request is attributed to the `github.com` origin.
+- **`chrome.storage` is read through the service worker.** The content script asks for the
+  `scanrepo:options` message and gets back only the auto-scan flag, because it runs in
+  page-origin context and must never hold the stored GitHub token. Auto-scan itself is
+  gated by the pure `shouldAutoScan` in `src/content/auto-scan.js`, so a decisive
+  preference is unit-tested rather than only exercised in a browser.
 - **Report text is untrusted** (a hostile repo names its own files). Everything reaching
   the DOM is escaped in `src/ui/tooltip.js`. Keep the escaping tests passing.
 - MV3 worker fetches are not visible to `page.on('request')` in Puppeteer. Observe them
