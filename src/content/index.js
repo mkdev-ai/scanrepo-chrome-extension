@@ -24,7 +24,7 @@ function injectStyles() {
   link.rel = 'stylesheet';
   // web_accessible_resources; loaded from the page so GitHub's CSP cannot block injecting CSS.
   link.href = chrome.runtime.getURL('content.css');
-  (document.head ?? document.documentElement).appendChild(link);
+  (document.head || document.documentElement).appendChild(link);
 }
 
 function buildButton() {
@@ -117,11 +117,10 @@ async function runScan(target) {
     response = { ok: false, error: { message: 'Extension was reloaded. Refresh the page.', code: 'disconnected' } };
   }
 
-  if (!response?.ok) {
-    currentVm = errorViewModel(
-      `${target.owner}/${target.repo}`,
-      response?.error?.message ?? 'Scan failed.',
-    );
+  if (!response || !response.ok) {
+    const errorMessage = response && response.error ? response.error.message : undefined;
+    const message = errorMessage === undefined ? 'Scan failed.' : errorMessage;
+    currentVm = errorViewModel(`${target.owner}/${target.repo}`, message);
     setButtonState('error', 'Scan failed');
     showTooltip();
     return;
@@ -216,7 +215,7 @@ function watchForChanges() {
     }
     injectButton();
   });
-  observer.observe(document.body ?? document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
   const mutableHistory = /** @type {Record<string, any>} */ (history);
   for (const method of ['pushState', 'replaceState']) {

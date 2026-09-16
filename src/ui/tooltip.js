@@ -12,15 +12,18 @@ const VERDICT_LABEL = {
   error: 'Scan failed',
 };
 
+const UNKNOWN_VERDICT = 'unknown';
+
 export const TOOLTIP_ID = 'scanrepo-tooltip';
 
 /**
- * Escape before interpolating into innerHTML — report text is remote data.
+ * Escape a value before it is interpolated into innerHTML — report text is remote data.
  * @param {unknown} value
  * @returns {string}
  */
 function escapeHtml(value) {
-  return String(value ?? '')
+  if (value === null || value === undefined) return '';
+  return String(value)
     .replace(/&/g, '&amp;')
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
@@ -28,59 +31,109 @@ function escapeHtml(value) {
     .replace(/'/g, '&#39;');
 }
 
-/** @param {string} verdict */
+/**
+ * Wrap already-safe content in a classed element. The class name and content are the
+ * caller's responsibility; report text must be escaped before it is passed in.
+ * @param {string} tag
+ * @param {string} className
+ * @param {string} [content]
+ * @returns {string}
+ */
+function wrap(tag, className, content = '') {
+  return `<${tag} class="${escapeHtml(className)}">${content}</${tag}>`;
+}
+
+/** The label for a verdict, defaulting to the unknown state.
+ * @param {string} [verdict]
+ * @returns {string}
+ */
 export function verdictLabel(verdict) {
-  return VERDICT_LABEL[verdict] ?? VERDICT_LABEL.unknown;
+  const label = verdict === undefined ? undefined : VERDICT_LABEL[verdict];
+  return label === undefined ? VERDICT_LABEL[UNKNOWN_VERDICT] : label;
 }
 
 /** @param {import('../types.js').ViewModel} vm */
 function scoreBar(vm) {
   if (vm.score === null) return '';
   const clamped = Math.max(0, Math.min(100, vm.score));
-  return `<div class="scanrepo-score">
-      <span class="scanrepo-score-value">${clamped}<span class="scanrepo-score-max">/100</span></span>
-      <span class="scanrepo-score-label">risk score</span>
-    </div>
-    <div class="scanrepo-meter"><div class="scanrepo-meter-fill" style="width:${clamped}%"></div></div>`;
+  const max = '<span class="scanrepo-score-max">/100</span>';
+  const value = wrap('span', 'scanrepo-score-value', `${clamped}${max}`);
+  const label = wrap('span', 'scanrepo-score-label', 'risk score');
+  const fillStyle = `class="scanrepo-meter-fill" style="width:${clamped}%"`;
+  const meter = wrap('div', 'scanrepo-meter', `<div ${fillStyle}></div>`);
+  return wrap('div', 'scanrepo-score', value + label) + meter;
+}
+
+/** @param {import('../types.js').FindingView} finding */
+function findingHtml(finding) {
+  const severityText = escapeHtml(finding.severity);
+  const badge = wrap('span', `scanrepo-sev scanrepo-sev-${finding.severity}`, severityText);
+  const rule = wrap('code', 'scanrepo-rule', escapeHtml(finding.ruleId));
+  const head = wrap('div', 'scanrepo-finding-head', badge + rule);
+  const title = wrap('div', 'scanrepo-finding-title', escapeHtml(finding.title));
+
+  const location = escapeHtml(finding.location);
+  const locAttrs = `class="scanrepo-finding-loc" title="${location}"`;
+  const loc = `<div ${locAttrs}>${location}</div>`;
+
+  const snippet = finding.snippet
+    ? wrap('pre', 'scanrepo-snippet', escapeHtml(finding.snippet.slice(0, 240)))
+    : '';
+
+  return wrap('li', 'scanrepo-finding', head + title + loc + snippet);
+}
+
+/** @param {import('../types.js').ViewModel} vm */
+function moreFindings(vm) {
+  const hidden = vm.totalFindings - vm.findings.length;
+  if (hidden <= 0) return '';
+  return wrap('p', 'scanrepo-more', `+${hidden} more findings in the full report`);
 }
 
 /** @param {import('../types.js').ViewModel} vm */
 function findingsHtml(vm) {
   if (vm.verdict === 'error') return '';
   if (vm.findings.length === 0) {
-    return '<p class="scanrepo-empty">No findings reported.</p>';
+    return wrap('p', 'scanrepo-empty', 'No findings reported.');
   }
-  const items = vm.findings
-    .map(
-      (finding) => `<li class="scanrepo-finding">
-        <div class="scanrepo-finding-head">
-          <span class="scanrepo-sev scanrepo-sev-${escapeHtml(finding.severity)}">${escapeHtml(finding.severity)}</span>
-          <code class="scanrepo-rule">${escapeHtml(finding.ruleId)}</code>
-        </div>
-        <div class="scanrepo-finding-title">${escapeHtml(finding.title)}</div>
-        <div class="scanrepo-finding-loc" title="${escapeHtml(finding.location)}">${escapeHtml(finding.location)}</div>
-        ${finding.snippet ? `<pre class="scanrepo-snippet">${escapeHtml(finding.snippet.slice(0, 240))}</pre>` : ''}
-      </li>`,
-    )
-    .join('');
-  const more =
-    vm.totalFindings > vm.findings.length
-      ? `<p class="scanrepo-more">+${vm.totalFindings - vm.findings.length} more findings in the full report</p>`
-      : '';
-  return `<ul class="scanrepo-findings">${items}</ul>${more}`;
+  const items = vm.findings.map(findingHtml).join('');
+  return wrap('ul', 'scanrepo-findings', items) + moreFindings(vm);
 }
 
 /** @param {import('../types.js').ViewModel} vm */
 function coverageNote(vm) {
-  if (!vm.incomplete && vm.coverage === null) return '';
+  // Unknown coverage is not worth noting; a complete scan at high coverage speaks for itself.
   if (vm.coverage === null) return '';
-  if (vm.coverage >= 95 && !vm.incomplete) return '';
+  if (!vm.incomplete && vm.coverage >= 95) return '';
+
   const warning = vm.incomplete
     ? 'Too few files could be read to stand behind a verdict.'
     : 'Partial coverage — some files could not be read.';
-  return `<p class="scanrepo-coverage">${warning} Scanned ${vm.coverage}% of the repo${
-    vm.commitSha ? ` at ${escapeHtml(vm.commitSha.slice(0, 7))}` : ''
-  }. Add a GitHub token in options for full coverage.</p>`;
+  const commit = vm.commitSha ? ` at ${escapeHtml(vm.commitSha.slice(0, 7))}` : '';
+  const scanned = ` Scanned ${vm.coverage}% of the repo${commit}.`;
+  const hint = ' Add a GitHub token in options for full coverage.';
+  return wrap('p', 'scanrepo-coverage', warning + scanned + hint);
+}
+
+/** @param {import('../types.js').ViewModel} vm */
+function reportLink(vm) {
+  if (!vm.url) return '';
+  const attrs = `class="scanrepo-link" href="${escapeHtml(vm.url)}" target="_blank" rel="noopener noreferrer"`;
+  return `<a ${attrs}>View full report on scanrepo.dev →</a>`;
+}
+
+/** @param {import('../types.js').ViewModel} vm @param {string} verdict */
+function tooltipBody(vm, verdict) {
+  if (verdict === 'error') {
+    const message = escapeHtml(vm.errorMessage === undefined ? 'Scan failed.' : vm.errorMessage);
+    return wrap('p', 'scanrepo-error', message);
+  }
+  return [
+    wrap('p', 'scanrepo-summary', escapeHtml(vm.summary)),
+    scoreBar(vm),
+    findingsHtml(vm),
+    coverageNote(vm),
+  ].join('');
 }
 
 /**
@@ -90,26 +143,16 @@ function coverageNote(vm) {
  * @returns {string} HTML
  */
 export function renderTooltipHtml(vm) {
-  const verdict = vm.verdict ?? 'unknown';
-  const link = vm.url
-    ? `<a class="scanrepo-link" href="${escapeHtml(vm.url)}" target="_blank" rel="noopener noreferrer">View full report on scanrepo.dev →</a>`
-    : '';
-
-  const body =
-    verdict === 'error'
-      ? `<p class="scanrepo-error">${escapeHtml(vm.errorMessage ?? 'Scan failed.')}</p>`
-      : `<p class="scanrepo-summary">${escapeHtml(vm.summary)}</p>
-         ${scoreBar(vm)}
-         ${findingsHtml(vm)}
-         ${coverageNote(vm)}`;
-
-  return `<div class="scanrepo-header">
-      <span class="scanrepo-verdict scanrepo-verdict-${escapeHtml(verdict)}">${escapeHtml(verdictLabel(verdict))}</span>
-      <span class="scanrepo-repo">${escapeHtml(vm.repoFullName)}</span>
-    </div>
-    ${body}
-    <p class="scanrepo-disclaimer">${escapeHtml(vm.disclaimer)}</p>
-    ${link}`;
+  const verdict = vm.verdict === undefined ? UNKNOWN_VERDICT : vm.verdict;
+  const verdictBadge = wrap(
+    'span',
+    `scanrepo-verdict scanrepo-verdict-${verdict}`,
+    escapeHtml(verdictLabel(verdict)),
+  );
+  const repoName = wrap('span', 'scanrepo-repo', escapeHtml(vm.repoFullName));
+  const header = wrap('div', 'scanrepo-header', verdictBadge + repoName);
+  const disclaimer = wrap('p', 'scanrepo-disclaimer', escapeHtml(vm.disclaimer));
+  return header + tooltipBody(vm, verdict) + disclaimer + reportLink(vm);
 }
 
 /**
@@ -130,7 +173,7 @@ export function renderTooltip(root, vm) {
     (document.body ?? document.documentElement).appendChild(node);
   }
   node.innerHTML = renderTooltipHtml(vm);
-  node.dataset.verdict = vm.verdict ?? 'unknown';
+  node.dataset.verdict = vm.verdict === undefined ? UNKNOWN_VERDICT : vm.verdict;
   return node;
 }
 

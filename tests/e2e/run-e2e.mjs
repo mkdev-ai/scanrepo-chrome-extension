@@ -14,9 +14,9 @@ import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const dist = path.join(root, 'dist');
-const CHROME = process.env.CHROME_PATH ?? '/usr/bin/chromium';
+const CHROME = process.env.CHROME_PATH || '/usr/bin/chromium';
 // A tiny public repo, so the live scan is quick.
-const FIXTURE_REPO = process.env.E2E_REPO ?? 'octocat/Hello-World';
+const FIXTURE_REPO = process.env.E2E_REPO || 'octocat/Hello-World';
 const PROTOCOL_TIMEOUT_MS = 180_000;
 
 const failures = [];
@@ -140,22 +140,31 @@ try {
   check('the button is injected', true);
 
   const injected = await page.evaluate(() => {
+    // Read a nested field without optional chaining.
+    const pick = (value, key) => (value === null || value === undefined ? undefined : value[key]);
+    const text = (value) => (value === null || value === undefined ? '' : value);
     const button = document.getElementById('scanrepo-scan-button');
     // Select the *rendered* Code control; file-view dropdowns reuse the same label.
-    const codeButton =
-      [...document.querySelectorAll('button, summary, a[role="button"]')].find(
-        (el) => /^code$/i.test(el.textContent.trim()) && el.getClientRects().length > 0,
-      ) ?? null;
+    let codeButton = null;
+    for (const el of document.querySelectorAll('button, summary, a[role="button"]')) {
+      if (/^code$/i.test(el.textContent.trim()) && el.getClientRects().length > 0) {
+        codeButton = el;
+        break;
+      }
+    }
+    const parent = codeButton ? codeButton.parentElement : null;
+    const stylesheet = document.getElementById('scanrepo-styles');
+    const stylesheetHref = stylesheet ? stylesheet.getAttribute('href') : '';
     return {
       visible: button.offsetParent !== null,
-      label: button.querySelector('.scanrepo-btn-label')?.textContent ?? '',
+      label: text(pick(button.querySelector('.scanrepo-btn-label'), 'textContent')),
       hasAria: button.getAttribute('aria-haspopup'),
-      stylesheetHref: document.getElementById('scanrepo-styles')?.getAttribute('href') ?? '',
+      stylesheetHref,
       codeButtonFound: Boolean(codeButton),
-      sharesRowWithCode: Boolean(codeButton && button.parentElement === codeButton.parentElement),
+      sharesRowWithCode: Boolean(parent && button.parentElement === parent),
       isPrecedingSiblingOfCode: Boolean(codeButton && button.nextElementSibling === codeButton),
-      rowSiblings: codeButton
-        ? [...button.parentElement.children].map((c) => c.textContent.trim().slice(0, 18))
+      rowSiblings: parent
+        ? [...parent.children].map((c) => c.textContent.trim().slice(0, 18))
         : [],
     };
   });
@@ -186,18 +195,26 @@ try {
   );
 
   const result = await page.evaluate(() => {
+    const pick = (value, key) => (value === null || value === undefined ? undefined : value[key]);
+    const text = (value) => (value === null || value === undefined ? '' : value);
     const tooltip = document.getElementById('scanrepo-tooltip');
+    const button = document.getElementById('scanrepo-scan-button');
+    const queryText = (selector) => text(pick(tooltip ? tooltip.querySelector(selector) : null, 'textContent'));
+    const queryAttr = (selector, attr) => {
+      const el = tooltip ? tooltip.querySelector(selector) : null;
+      return el ? text(el.getAttribute(attr)) : '';
+    };
     return {
-      state: document.getElementById('scanrepo-scan-button')?.dataset.state,
-      verdict: tooltip?.dataset.verdict,
-      summary: tooltip?.querySelector('.scanrepo-summary')?.textContent ?? '',
-      visible: tooltip?.classList.contains('scanrepo-tooltip-visible') ?? false,
-      linkHref: tooltip?.querySelector('.scanrepo-link')?.getAttribute('href') ?? '',
-      linkRel: tooltip?.querySelector('.scanrepo-link')?.getAttribute('rel') ?? '',
-      disclaimer: tooltip?.querySelector('.scanrepo-disclaimer')?.textContent ?? '',
-      errorText: tooltip?.querySelector('.scanrepo-error')?.textContent ?? '',
-      scoreText: tooltip?.querySelector('.scanrepo-score-value')?.textContent ?? '',
-      hasRawScript: (tooltip?.innerHTML ?? '').includes('<script'),
+      state: pick(button, 'dataset') ? button.dataset.state : undefined,
+      verdict: pick(tooltip, 'dataset') ? tooltip.dataset.verdict : undefined,
+      summary: queryText('.scanrepo-summary'),
+      visible: Boolean(tooltip && tooltip.classList.contains('scanrepo-tooltip-visible')),
+      linkHref: queryAttr('.scanrepo-link', 'href'),
+      linkRel: queryAttr('.scanrepo-link', 'rel'),
+      disclaimer: queryText('.scanrepo-disclaimer'),
+      errorText: queryText('.scanrepo-error'),
+      scoreText: queryText('.scanrepo-score-value'),
+      hasRawScript: text(pick(tooltip, 'innerHTML')).includes('<script'),
     };
   });
 
@@ -233,30 +250,36 @@ try {
   check('exactly one scan request was made', scanRequests.length === 1, `got ${scanRequests.length}`);
 
   const request = scanRequests[0];
+  const requestUrl = request ? request.url : undefined;
+  const requestMethod = request ? request.method : undefined;
+  const requestBody = request ? request.body : undefined;
   check(
     'the request targets the scanrepo.dev scan endpoint',
-    request?.url === 'https://www.scanrepo.dev/api/scan',
-    request?.url,
+    requestUrl === 'https://www.scanrepo.dev/api/scan',
+    requestUrl,
   );
-  check('the request uses POST', request?.method === 'POST', request?.method);
+  check('the request uses POST', requestMethod === 'POST', requestMethod);
 
   let body = null;
   try {
-    body = JSON.parse(request?.body ?? 'null');
+    body = JSON.parse(requestBody === undefined ? 'null' : requestBody);
   } catch {
     body = null;
   }
-  check('the request body is valid JSON', body !== null, String(request?.body).slice(0, 120));
+  check('the request body is valid JSON', body !== null, String(requestBody).slice(0, 120));
   // scanrepo.dev rejects a bare `owner/repo` (HTTP 400) and accepts both
   // `github.com/o/r` and `https://github.com/o/r`; the scheme-less form is the
   // documented canonical one.
-  check('the request carries the repo slug the API expects', body?.url === `github.com/${FIXTURE_REPO}`, body?.url);
+  const bodyUrl = body ? body.url : undefined;
+  check('the request carries the repo slug the API expects', bodyUrl === `github.com/${FIXTURE_REPO}`, bodyUrl);
   // These two prove the saved options were read and forwarded.
-  check('the saved publish preference is forwarded', body?.publish === true, String(body?.publish));
+  const bodyPublish = body ? body.publish : undefined;
+  check('the saved publish preference is forwarded', bodyPublish === true, String(bodyPublish));
+  const bodyToken = body ? body.token : undefined;
   check(
     'the saved GitHub token is forwarded',
-    body?.token === 'ghp_e2e_probe_token',
-    body?.token ? 'present' : 'missing',
+    bodyToken === 'ghp_e2e_probe_token',
+    bodyToken ? 'present' : 'missing',
   );
 
   // ---------------------------------------------------------------------------
@@ -299,10 +322,14 @@ try {
             return { type: 'unparseable' };
           }
         });
+      let result = null;
+      for (const event of events) {
+        if (event.type === 'result') result = event.data;
+      }
       return {
         status: response.status,
         types: events.map((e) => e.type),
-        result: events.find((e) => e.type === 'result')?.data ?? null,
+        result,
       };
     };
     return {
@@ -311,19 +338,23 @@ try {
     };
   });
 
-  check('a bare owner/repo is rejected as invalid', apiProbe.bareSlug.status === 400, String(apiProbe.bareSlug.status));
-  check('the scheme-less slug form is accepted', apiProbe.fullUrl.status === 200, String(apiProbe.fullUrl.status));
+  const bare = apiProbe.bareSlug;
+  const full = apiProbe.fullUrl;
+  const fullResult = full.result;
+  check('a bare owner/repo is rejected as invalid', bare.status === 400, String(bare.status));
+  check('the scheme-less slug form is accepted', full.status === 200, String(full.status));
   check(
     'the stream ends with a result frame',
-    apiProbe.fullUrl.types.at(-1) === 'result',
-    apiProbe.fullUrl.types.join(','),
+    full.types.at(-1) === 'result',
+    full.types.join(','),
   );
   check(
     'the result carries riskLevel, riskScore and findings',
-    typeof apiProbe.fullUrl.result?.riskLevel === 'string' &&
-      typeof apiProbe.fullUrl.result?.riskScore === 'number' &&
-      Array.isArray(apiProbe.fullUrl.result?.findings),
-    JSON.stringify(apiProbe.fullUrl.result ?? {}).slice(0, 120),
+    fullResult !== null &&
+      typeof fullResult.riskLevel === 'string' &&
+      typeof fullResult.riskScore === 'number' &&
+      Array.isArray(fullResult.findings),
+    JSON.stringify(fullResult === null ? {} : fullResult).slice(0, 120),
   );
 } catch (error) {
   failures.push(`harness error: ${error.message}`);

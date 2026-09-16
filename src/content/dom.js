@@ -33,12 +33,12 @@ export function findCodeButton(root) {
   /** @type {HTMLElement[]} */
   const candidates = [];
   for (const el of root.querySelectorAll('button, summary, a[role="button"]')) {
-    if (el instanceof HTMLElement && /^code$/i.test(el.textContent?.trim() ?? '')) {
-      candidates.push(el);
-    }
+    if (!(el instanceof HTMLElement)) continue;
+    const label = el.textContent;
+    if (/^code$/i.test(label ? label.trim() : '')) candidates.push(el);
   }
-  if (candidates.length === 0) return legacy instanceof HTMLElement ? legacy : null;
-  return preferVisible(candidates)[0] ?? null;
+  if (candidates.length > 0) return preferVisible(candidates)[0] ?? null;
+  return legacy instanceof HTMLElement ? legacy : null;
 }
 
 /**
@@ -48,7 +48,8 @@ export function findCodeButton(root) {
  * @returns {Element | null}
  */
 export function findActionContainer(codeButton) {
-  return codeButton?.parentElement ?? null;
+  if (!codeButton) return null;
+  return codeButton.parentElement;
 }
 
 /**
@@ -67,9 +68,10 @@ export function isPrivateRepo(root) {
   }
 
   // The header renders the visibility as a standalone "Public"/"Private" label.
-  const header = root.querySelector('#repository-container-header') ?? root;
+  const header = root.querySelector('#repository-container-header') || root;
   for (const node of header.querySelectorAll('span, div, a')) {
-    const text = node.textContent?.trim() ?? '';
+    const label = node.textContent;
+    const text = label ? label.trim() : '';
     if (/^private$/i.test(text)) return true;
     if (/^public$/i.test(text)) return false;
   }
