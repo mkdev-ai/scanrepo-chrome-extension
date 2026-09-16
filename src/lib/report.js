@@ -9,13 +9,37 @@ import { REPORT_BASE, SEVERITIES, VERDICTS } from '../contract.js';
 /** @type {Record<string, number>} */
 const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
+/**
+ * Read an untyped API field as a string. Only null/undefined fall back, so an
+ * explicit empty string or `0` is preserved as the API sent it.
+ * @param {Record<string, any> | null | undefined} record
+ * @param {string} key
+ * @param {string} [fallback]
+ * @returns {string}
+ */
+function readText(record, key, fallback = '') {
+  if (!record) return fallback;
+  const value = record[key];
+  if (value === null || value === undefined) return fallback;
+  return String(value);
+}
+
+/** The report's findings, or an empty list when the field is absent.
+ * @param {RepoReport | null | undefined} report
+ * @returns {Finding[]}
+ */
+function findingsOf(report) {
+  if (!report || !Array.isArray(report.findings)) return [];
+  return report.findings;
+}
+
 /** Sort rank for a severity; unknown severities sort last.
  * @param {Finding | null | undefined} finding
  * @returns {number}
  */
 function severityRank(finding) {
-  const severity = String(finding?.severity ?? '');
-  return SEVERITY_RANK[severity] ?? 99;
+  const rank = SEVERITY_RANK[readText(finding, 'severity')];
+  return rank === undefined ? 99 : rank;
 }
 
 /** The finding's severity, narrowed to a known level.
@@ -23,8 +47,17 @@ function severityRank(finding) {
  * @returns {string}
  */
 function severityOf(finding) {
-  const severity = String(finding?.severity ?? '');
+  const severity = readText(finding, 'severity');
   return SEVERITIES.includes(severity) ? severity : 'info';
+}
+
+/** Point contribution, treating a non-numeric value as zero.
+ * @param {Finding | null | undefined} finding
+ * @returns {number}
+ */
+function pointsOf(finding) {
+  if (!finding) return 0;
+  return Number(finding.points) || 0;
 }
 
 export const DISCLAIMER =
@@ -37,7 +70,7 @@ export const DISCLAIMER =
 export function verdictOf(report) {
   if (!report) return 'error';
   if (report.incomplete === true) return 'inconclusive';
-  const level = String(report.riskLevel ?? '').toLowerCase();
+  const level = readText(report, 'riskLevel').toLowerCase();
   return VERDICTS.includes(level) ? level : 'unknown';
 }
 
@@ -46,10 +79,10 @@ export function verdictOf(report) {
  * @returns {string | null}
  */
 export function reportUrl(report) {
-  const meta = report?.meta ?? {};
-  const provider = meta.provider === 'bitbucket' ? 'bitbucket' : 'github';
-  const owner = String(meta.owner ?? '');
-  const repo = String(meta.repo ?? '');
+  const meta = report ? report.meta : null;
+  const provider = readText(meta, 'provider') === 'bitbucket' ? 'bitbucket' : 'github';
+  const owner = readText(meta, 'owner');
+  const repo = readText(meta, 'repo');
   if (!owner || !repo) return null;
   return `${REPORT_BASE}/${provider}/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`;
 }
@@ -62,12 +95,11 @@ export function reportUrl(report) {
  * @returns {Finding[]}
  */
 export function topFindings(report, limit = 5) {
-  const findings = Array.isArray(report?.findings) ? report.findings : [];
-  return [...findings]
+  return [...findingsOf(report)]
     .sort((a, b) => {
       const bySeverity = severityRank(a) - severityRank(b);
       if (bySeverity !== 0) return bySeverity;
-      return (Number(b?.points) || 0) - (Number(a?.points) || 0);
+      return pointsOf(b) - pointsOf(a);
     })
     .slice(0, limit);
 }
@@ -80,24 +112,27 @@ export function topFindings(report, limit = 5) {
  * @returns {string}
  */
 export function summarize(report) {
-  const findings = Array.isArray(report?.findings) ? report.findings : [];
+  const findings = findingsOf(report);
   if (findings.length === 0) {
-    return report?.incomplete ? 'No findings, but coverage was too low to conclude.' : 'No findings.';
+    if (report && report.incomplete) return 'No findings, but coverage was too low to conclude.';
+    return 'No findings.';
   }
+
   /** @type {Record<string, number>} */
   const counts = { critical: 0, warning: 0, info: 0 };
   let repoLevel = 0;
   for (const finding of findings) {
     counts[severityOf(finding)] += 1;
-    if (!finding?.filePath) repoLevel += 1;
+    if (!readText(finding, 'filePath')) repoLevel += 1;
   }
+
   const parts = [];
   if (counts.critical) parts.push(`${counts.critical} critical`);
   if (counts.warning) parts.push(`${counts.warning} warning`);
   if (counts.info) parts.push(`${counts.info} info`);
-  const detail = parts.join(', ');
   const repoNote = repoLevel ? ` (${repoLevel} repo-level)` : '';
-  return `${findings.length} finding${findings.length === 1 ? '' : 's'}: ${detail}${repoNote}`;
+  const noun = findings.length === 1 ? 'finding' : 'findings';
+  return `${findings.length} ${noun}: ${parts.join(', ')}${repoNote}`;
 }
 
 /** A single finding reduced to display fields. Line numbers are not provided by the API.
@@ -105,16 +140,16 @@ export function summarize(report) {
  * @returns {import('../types.js').FindingView}
  */
 export function findingView(finding) {
-  const filePath = String(finding?.filePath ?? '').trim();
+  const filePath = readText(finding, 'filePath').trim();
   return {
-    ruleId: String(finding?.ruleId ?? 'unknown'),
-    title: String(finding?.title ?? ''),
-    description: String(finding?.description ?? ''),
+    ruleId: readText(finding, 'ruleId', 'unknown'),
+    title: readText(finding, 'title'),
+    description: readText(finding, 'description'),
     severity: severityOf(finding),
     filePath,
     // Repo-level findings have no file; label them so the UI never shows a bare blank.
     location: filePath || 'repository-level',
-    snippet: String(finding?.snippet ?? '').trim(),
+    snippet: readText(finding, 'snippet').trim(),
   };
 }
 
@@ -123,13 +158,16 @@ export function findingView(finding) {
  * @returns {number | null}
  */
 export function coveragePercent(report) {
-  const total = Number(report?.totalRepoFiles);
+  if (!report) return null;
+  const total = Number(report.totalRepoFiles);
   if (!Number.isFinite(total) || total <= 0) return null;
-  const scanned = Number(report?.filesScanned);
+
+  const scanned = Number(report.filesScanned);
   if (!Number.isFinite(scanned)) return null;
-  const fromRatio = Number(report?.coverage);
-  const ratio =
-    Number.isFinite(fromRatio) && fromRatio >= 0 && fromRatio <= 1 ? fromRatio : scanned / total;
+
+  const fromRatio = Number(report.coverage);
+  const usable = Number.isFinite(fromRatio) && fromRatio >= 0 && fromRatio <= 1;
+  const ratio = usable ? fromRatio : scanned / total;
   return Math.round(ratio * 100);
 }
 
@@ -182,21 +220,24 @@ export function pendingViewModel(repoFullName) {
  * @returns {import('../types.js').ViewModel} normalized view model
  */
 export function buildViewModel(report) {
-  const verdict = verdictOf(report);
-  const coverage = coveragePercent(report);
+  const findings = findingsOf(report);
+  const meta = report ? report.meta : null;
+  // `Number(undefined)` is NaN, so a missing score maps to null below.
+  const rawScore = Number(report ? report.riskScore : undefined);
+
   return {
-    verdict,
-    score: Number.isFinite(Number(report?.riskScore)) ? Number(report.riskScore) : null,
+    verdict: verdictOf(report),
+    score: Number.isFinite(rawScore) ? rawScore : null,
     summary: summarize(report),
     findings: topFindings(report).map(findingView),
-    totalFindings: Array.isArray(report?.findings) ? report.findings.length : 0,
+    totalFindings: findings.length,
     url: reportUrl(report),
-    coverage,
-    incomplete: report?.incomplete === true,
-    commitSha: String(report?.commitSha ?? ''),
-    ref: String(report?.ref ?? ''),
-    repoFullName: report?.meta ? `${report.meta.owner}/${report.meta.repo}` : '',
-    scannedAt: String(report?.scannedAt ?? ''),
+    coverage: coveragePercent(report),
+    incomplete: report ? report.incomplete === true : false,
+    commitSha: readText(report, 'commitSha'),
+    ref: readText(report, 'ref'),
+    repoFullName: meta ? `${meta.owner}/${meta.repo}` : '',
+    scannedAt: readText(report, 'scannedAt'),
     disclaimer: DISCLAIMER,
   };
 }
