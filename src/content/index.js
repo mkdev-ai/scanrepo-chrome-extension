@@ -3,11 +3,11 @@
 
 import { buildViewModel, errorViewModel, pendingViewModel } from '../lib/report.js';
 import { autoScanKey, shouldAutoScan } from './auto-scan.js';
+import { BUTTON_ID, buildButton } from './button.js';
 import { findActionContainer, findCodeButton, isPrivateRepo } from './dom.js';
 import { parseRepoFromUrl } from '../lib/parse.js';
 import { removeTooltip, renderTooltip } from '../ui/tooltip.js';
 
-const BUTTON_ID = 'scanrepo-scan-button';
 const STYLE_ID = 'scanrepo-styles';
 const HOVER_CLOSE_DELAY_MS = 250;
 
@@ -31,27 +31,6 @@ function injectStyles() {
   // web_accessible_resources; loaded from the page so GitHub's CSP cannot block injecting CSS.
   link.href = chrome.runtime.getURL('content.css');
   (document.head || document.documentElement).appendChild(link);
-}
-
-function buildButton() {
-  const button = document.createElement('button');
-  button.id = BUTTON_ID;
-  button.type = 'button';
-  // Match GitHub's native action-bar button classes so it inherits Primer styling
-  // and the same hover treatment as "Code".
-  button.className = 'btn btn-sm scanrepo-btn';
-  button.setAttribute('aria-haspopup', 'dialog');
-  button.setAttribute('aria-expanded', 'false');
-
-  button.innerHTML = `
-    <span class="scanrepo-btn-icon" aria-hidden="true">
-      <svg viewBox="0 0 16 16" width="16" height="16" fill="currentColor">
-        <path d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0Zm0 2.5 1.6 3.4 3.7.5-2.7 2.6.7 3.7L8 10.9l-3.3 1.8.7-3.7L2.7 6.4l3.7-.5L8 2.5Z"/>
-      </svg>
-    </span>
-    <span class="scanrepo-btn-label">Scan this repo</span>
-    <span class="scanrepo-btn-spinner" hidden></span>`;
-  return button;
 }
 
 /** The tooltip is positioned under the button; GitHub's header is sticky, so we

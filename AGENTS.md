@@ -55,6 +55,13 @@ under jsdom. Keep it that way.
 
 ## Architecture invariants
 
+- **The injected button must be centred without content.css.** `content.css` is fetched
+  over an asynchronous `<link>`, so the button paints with UA defaults for the first few
+  frames unless the centring declarations are also applied inline at creation. Without
+  them the button is `display:block` with an `inline` icon, which drops the 16px SVG onto
+  the text baseline ~3px above the button's centre — the "icon is off while loading"
+  bug (SCB-4). `src/content/button.js` applies the same declarations `content.css`
+  repeats; `tests/unit/button.test.js` fails if the two drift.
 - The **service worker owns all network access**. The content script only posts messages,
   so no scanrepo.dev request is attributed to the `github.com` origin.
 - **`chrome.storage` is read through the service worker.** The content script asks for the
