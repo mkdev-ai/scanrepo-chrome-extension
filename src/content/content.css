@@ -1,5 +1,9 @@
 /* Injected into GitHub pages. Uses GitHub's Primer design tokens so the button and
-   tooltip match native styling in both light and dark themes. */
+   tooltip match native styling in both light and dark themes.
+
+   This file is fetched asynchronously, so the declarations that keep the button and its
+   icon centred are mirrored inline in src/content/button.js. Change one, change both —
+   tests/unit/button.test.js fails when they drift. */
 
 .scanrepo-btn {
   display: inline-flex;

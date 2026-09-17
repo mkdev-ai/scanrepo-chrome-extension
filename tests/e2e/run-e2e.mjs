@@ -186,6 +186,65 @@ try {
   check('the button stays idle until it is clicked', idleState !== 'loading', String(idleState));
 
   // ---------------------------------------------------------------------------
+  console.log(`\n[3b] the icon is centred from the very first paint`);
+  // Regression guard for SCB-4. The button used to be injected alongside an
+  // asynchronously fetched stylesheet, so for the first few frames it painted with UA
+  // defaults and the icon sat ~3px above the button's centre. Sample the geometry from
+  // the moment the button appears: no frame may be off-centre, before or after CSS.
+  const centredPage = await browser.newPage();
+  await centredPage.setViewport({ width: 667, height: 900 });
+  await centredPage.evaluateOnNewDocument(() => {
+    window.__samples = [];
+    setInterval(() => {
+      const button = document.getElementById('scanrepo-scan-button');
+      if (!button) return;
+      const icon = button.querySelector('.scanrepo-btn-icon');
+      const svg = button.querySelector('svg');
+      const centre = (el) => {
+        if (!el) return null;
+        const rect = el.getBoundingClientRect();
+        return (rect.top + rect.bottom) / 2;
+      };
+      const buttonCentre = centre(button);
+      const iconCentre = centre(icon);
+      const svgCentre = centre(svg);
+      window.__samples.push({
+        buttonDisplay: getComputedStyle(button).display,
+        iconDisplay: icon ? getComputedStyle(icon).display : null,
+        iconOffset: iconCentre === null || buttonCentre === null ? null : iconCentre - buttonCentre,
+        svgOffset: svgCentre === null || buttonCentre === null ? null : svgCentre - buttonCentre,
+      });
+    }, 8);
+  });
+  await centredPage.goto(`https://github.com/${FIXTURE_REPO}`, {
+    waitUntil: 'domcontentloaded',
+    timeout: 60_000,
+  });
+  await centredPage.waitForSelector('#scanrepo-scan-button', { timeout: 30_000 });
+  await new Promise((resolve) => setTimeout(resolve, 2_000));
+
+  const centring = await centredPage.evaluate(() => {
+    const samples = window.__samples.filter((s) => s.iconOffset !== null);
+    const worst = samples.reduce(
+      (max, s) => Math.max(max, Math.abs(s.iconOffset), Math.abs(s.svgOffset)),
+      0,
+    );
+    const first = samples[0];
+    return {
+      frames: samples.length,
+      worstOffset: worst,
+      offCentreFrames: samples.filter(
+        (s) => Math.abs(s.iconOffset) > 0.5 || Math.abs(s.svgOffset) > 0.5,
+      ).length,
+      firstButtonDisplay: first ? first.buttonDisplay : null,
+      firstIconDisplay: first ? first.iconDisplay : null,
+    };
+  });
+  check('the icon never renders off-centre', centring.offCentreFrames === 0, `${centring.offCentreFrames} of ${centring.frames} frames, worst ${centring.worstOffset.toFixed(2)}px`);
+  check('the button is centred on its very first frame', centring.firstButtonDisplay === 'flex' || centring.firstButtonDisplay === 'inline-flex', `first frame display=${centring.firstButtonDisplay}, icon=${centring.firstIconDisplay}`);
+  await centredPage.close();
+
+  // ---------------------------------------------------------------------------
   console.log(`\n[4] a live scan runs and returns a verdict`);
   await page.click('#scanrepo-scan-button');
   await page.waitForFunction(
@@ -193,6 +252,35 @@ try {
     { timeout: 15_000 },
   );
   check('the button enters the loading state on click', true);
+
+  // The reported symptom was the icon drifting while a scan was running, so assert the
+  // geometry in the loading state too — icon, spinner and label must share a centre line.
+  const loadingGeometry = await page.evaluate(() => {
+    const button = document.getElementById('scanrepo-scan-button');
+    const centre = (el) => {
+      if (!el) return null;
+      const rect = el.getBoundingClientRect();
+      return (rect.top + rect.bottom) / 2;
+    };
+    const buttonCentre = centre(button);
+    const spinner = button.querySelector('.scanrepo-btn-spinner');
+    const spinnerRect = spinner ? spinner.getBoundingClientRect() : null;
+    return {
+      iconOffset: centre(button.querySelector('.scanrepo-btn-icon')) - buttonCentre,
+      svgOffset: centre(button.querySelector('svg')) - buttonCentre,
+      labelOffset: centre(button.querySelector('.scanrepo-btn-label')) - buttonCentre,
+      spinnerOffset: spinner && spinner.offsetParent !== null ? centre(spinner) - buttonCentre : null,
+      spinnerSize: spinnerRect ? `${spinnerRect.width}x${spinnerRect.height}` : null,
+    };
+  });
+  const loadingWorst = Math.max(
+    Math.abs(loadingGeometry.iconOffset),
+    Math.abs(loadingGeometry.svgOffset),
+    Math.abs(loadingGeometry.labelOffset),
+    Math.abs(loadingGeometry.spinnerOffset === null ? 0 : loadingGeometry.spinnerOffset),
+  );
+  check('the icon stays centred while loading', loadingWorst <= 0.5, JSON.stringify(loadingGeometry));
+  check('the spinner is rendered at its declared size', loadingGeometry.spinnerSize === '12x12', String(loadingGeometry.spinnerSize));
 
   await page.waitForFunction(
     () => {
